@@ -1,3 +1,4 @@
+"use client" 
 export default function SignupPage() {
 	return (
 		<main className="min-h-screen bg-[#e6e6e6] px-4 py-4 md:px-5 md:py-3">
