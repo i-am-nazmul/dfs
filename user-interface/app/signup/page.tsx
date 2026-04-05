@@ -4,7 +4,7 @@ export default function SignupPage() {
 			<h1 className="text-[62px] leading-none font-extrabold text-[#2f3b53]">SignUp</h1>
 
 			<div className="mx-auto mt-[220px] flex w-full max-w-[430px] flex-col items-center">
-				<form className="flex w-[290px] flex-col gap-1.5" onSubmit={(event) => event.preventDefault()}>
+				<div className="flex w-[290px] flex-col gap-1.5">
 					<input
 						type="text"
 						placeholder="Enter the username"
@@ -22,12 +22,12 @@ export default function SignupPage() {
 					/>
 
 					<button
-						type="submit"
+						type="button"
 						className="mt-1.5 mx-auto h-[56px] rounded-[8px] bg-[#00594f] px-4 text-[47px] leading-none font-normal text-white"
 					>
 						Signup
 					</button>
-				</form>
+				</div>
 
 				<button
 					type="button"
