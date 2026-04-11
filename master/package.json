@@ -12,6 +12,7 @@
   "type": "module",
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1029.0",
+    "bcrypt": "^6.0.0",
     "express": "^5.2.1"
   }
 }

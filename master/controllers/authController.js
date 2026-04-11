@@ -1,5 +1,5 @@
 import { PutItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
-import { dynamoClient } from "../config/dynamodb.js";
+import { dynamoClient } from "../connectDB/dynamodb.js";
 import bcrypt from "bcrypt";
 
 
