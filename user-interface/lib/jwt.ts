@@ -1,4 +1,4 @@
-import jwt from "jsonwebtoken";
+import jwt, { JwtPayload } from "jsonwebtoken";
 
 type UserPayload = {
   username: string;
@@ -14,4 +14,18 @@ export function signUserToken(payload: UserPayload) {
   return jwt.sign(payload, secret, {
     expiresIn: "1h",
   });
+}
+
+export function jwtVerify(token: string): UserPayload | null {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error("JWT_SECRET is not configured");
+  }
+
+  try {
+    const decoded = jwt.verify(token, secret) as JwtPayload & UserPayload;
+    return decoded;
+  } catch (error) {
+    return null;
+  }
 }

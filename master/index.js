@@ -1,6 +1,7 @@
 import express from 'express';
 import 'dotenv/config';
 import authRoutes from './routes/authRoutes.js';
+import fileRoutes from './routes/fileRoutes.js';
 
 const app = express();
 const PORT = 5000;
@@ -13,6 +14,7 @@ app.get('/', (req, res) => {
 });
 
 app.use('/auth', authRoutes);
+app.use('/files', fileRoutes);
 
 // Start server
 app.listen(PORT, () => {
