@@ -8,6 +8,11 @@ import fs from "fs";
 import path from "path";
 const PRIMARY_UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(process.cwd(), "files");
 
+const logEvent = (message) => {
+  const at = new Date().toLocaleString("en-IN", { hour12: true });
+  console.log(`[MASTER] ${at} | ${message}`);
+};
+
 const resolveWritableBaseDir = () => {
   fs.mkdirSync(PRIMARY_UPLOAD_DIR, { recursive: true });
   fs.accessSync(PRIMARY_UPLOAD_DIR, fs.constants.W_OK);
@@ -77,6 +82,7 @@ export const uploadFile = async (req, res) => {
 
     // Save file to disk
     fs.writeFileSync(filepath, file.buffer);
+    logEvent(`User ${email} uploaded file \"${file.originalname}\" to ${filepath}`);
 
     // Store metadata in DynamoDB
     const fileId = `${email}-${timestamp}`;
@@ -108,6 +114,7 @@ export const uploadFile = async (req, res) => {
     });
   } catch (error) {
     console.error("File upload error:", error);
+    logEvent(`Upload failed for ${req.body?.email || "unknown user"}: ${error?.message || "unknown error"}`);
     if (error?.code === "EACCES") {
       return res.status(500).json({
         message: "Upload directory permission denied on master node.",
@@ -126,6 +133,7 @@ export const getUserFiles = async (req, res) => {
     }
 
     const files = listFilesFromDisk(email);
+    logEvent(`User ${email} fetched files list (${files.length} files)`);
 
     return res.status(200).json({
       files,
@@ -172,6 +180,7 @@ export const deleteUserFile = async (req, res) => {
     }
 
     fs.unlinkSync(targetPath);
+    logEvent(`User ${email} deleted file \"${resolvedStoredFilename}\"`);
 
     // Best-effort DynamoDB cleanup for historical records.
     const scanResult = await dynamoClient.send(
@@ -213,6 +222,50 @@ export const deleteUserFile = async (req, res) => {
     });
   } catch (error) {
     console.error("Delete file error:", error);
+    logEvent(`Delete failed for ${req.body?.email || "unknown user"}: ${error?.message || "unknown error"}`);
     return res.status(500).json({ message: "File deletion failed." });
+  }
+};
+
+export const downloadUserFile = async (req, res) => {
+  try {
+    const email = req.query?.email?.toString().trim();
+    const storedFilename = req.query?.storedFilename?.toString().trim();
+    const filename = req.query?.filename?.toString().trim();
+
+    if (!email || (!storedFilename && !filename)) {
+      return res.status(400).json({ message: "Email and storedFilename or filename are required." });
+    }
+
+    const userDir = getUserDir(email);
+    const filesOnDisk = fs.existsSync(userDir) ? fs.readdirSync(userDir) : [];
+
+    let resolvedStoredFilename = storedFilename;
+    if (!resolvedStoredFilename && filename) {
+      resolvedStoredFilename = filesOnDisk.find(
+        (entry) => entry === filename || entry.endsWith(`-${filename}`)
+      );
+    }
+
+    if (!resolvedStoredFilename) {
+      return res.status(404).json({ message: "File not found." });
+    }
+
+    const targetPath = path.join(userDir, resolvedStoredFilename);
+    if (!targetPath.startsWith(userDir)) {
+      return res.status(400).json({ message: "Invalid file path." });
+    }
+
+    if (!fs.existsSync(targetPath)) {
+      return res.status(404).json({ message: "File not found." });
+    }
+
+    const downloadName = formatFilenameForUi(resolvedStoredFilename);
+    logEvent(`User ${email} downloaded file \"${downloadName}\"`);
+    return res.download(targetPath, downloadName);
+  } catch (error) {
+    console.error("Download file error:", error);
+    logEvent(`Download failed for ${req.query?.email || "unknown user"}: ${error?.message || "unknown error"}`);
+    return res.status(500).json({ message: "File download failed." });
   }
 };

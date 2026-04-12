@@ -108,6 +108,49 @@ export default function DashboardPage() {
     }
   };
 
+  const handleDownloadFile = async (file: File) => {
+    const toastId = toast.loading("Preparing download...");
+
+    try {
+      const response = await axios.get("/api/files/download", {
+        params: {
+          storedFilename: file.storedFilename,
+          filename: file.filename,
+        },
+        responseType: "blob",
+        withCredentials: true,
+      });
+
+      const contentDisposition = response.headers["content-disposition"] as string | undefined;
+      let downloadName = file.filename;
+      if (contentDisposition) {
+        const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+        const asciiMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+        if (utf8Match?.[1]) {
+          downloadName = decodeURIComponent(utf8Match[1]);
+        } else if (asciiMatch?.[1]) {
+          downloadName = asciiMatch[1];
+        }
+      }
+
+      const blobUrl = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.setAttribute("download", downloadName);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(blobUrl);
+
+      toast.success(`Downloaded ${downloadName}`, { id: toastId });
+    } catch (error) {
+      const errorMessage = axios.isAxiosError(error)
+        ? error.response?.data?.message ?? "File download failed."
+        : "Unable to reach server.";
+      toast.error(errorMessage, { id: toastId });
+    }
+  };
+
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return "0 Bytes";
     const k = 1024;
@@ -194,6 +237,12 @@ export default function DashboardPage() {
                   <p className="text-xs text-gray-400 mt-1">
                     {formatDate(file.uploadDate)}
                   </p>
+                  <button
+                    onClick={() => handleDownloadFile(file)}
+                    className="mt-2 mr-3 text-xs font-medium text-emerald-700 hover:text-emerald-800"
+                  >
+                    Download
+                  </button>
                   <button
                     onClick={() => handleDeleteFile(file)}
                     className="mt-2 text-xs font-medium text-red-600 hover:text-red-700"
