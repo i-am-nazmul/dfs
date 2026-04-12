@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     }
 
     const decoded = jwtVerify(tokenCookie);
-    if (!decoded || typeof decoded === "string" || !decoded.email) {
+    if (!decoded || !decoded.email) {
       return NextResponse.json(
         { message: "Invalid token." },
         { status: 401 }
@@ -21,6 +21,7 @@ export async function GET(request: NextRequest) {
     }
 
     const userEmail = decoded.email;
+    const username = decoded.username;
     const masterBaseUrl = process.env.MASTER_BASE_URL;
     const apiKey = process.env.API_KEY;
 
@@ -53,6 +54,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(
       {
+        username,
         files: responseData?.files ?? [],
         count: responseData?.count ?? 0,
       },

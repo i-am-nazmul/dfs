@@ -19,6 +19,7 @@ export default function DashboardPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
+  const [username, setUsername] = useState("User");
 
   // Fetch user files on mount
   useEffect(() => {
@@ -27,6 +28,7 @@ export default function DashboardPage() {
         const response = await axios.get("/api/files", {
           withCredentials: true,
         });
+        setUsername(response.data.username || "User");
         setFiles(response.data.files || []);
       } catch (error) {
         console.error("Failed to fetch files:", error);
@@ -105,7 +107,7 @@ export default function DashboardPage() {
   };
 
   return (
-    <main className="min-h-screen w-screen bg-gradient-to-br from-gray-50 to-gray-100">
+    <main className="min-h-screen w-screen bg-linear-to-br from-gray-50 to-gray-100">
       {/* Header */}
       <div className="flex justify-between items-center px-8 py-6 bg-white shadow-md">
         <h1 className="text-4xl font-bold text-gray-800 tracking-tight">
@@ -124,6 +126,7 @@ export default function DashboardPage() {
         {/* Left Side - Upload Section */}
         <div className="flex-1 flex flex-col items-center justify-center">
           <div className="text-center mb-8">
+            <p className="text-3xl font-semibold text-gray-800 mb-2">Hello, {username}</p>
             <p className="text-gray-600 text-lg">Upload files to your Distributed File System</p>
           </div>
 

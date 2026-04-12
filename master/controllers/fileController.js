@@ -2,19 +2,21 @@ import { PutItemCommand, ScanCommand } from "@aws-sdk/client-dynamodb";
 import { dynamoClient } from "../connectDB/dynamodb.js";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+const PRIMARY_UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(process.cwd(), "files");
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const UPLOAD_DIR = "/ec2/user/files";
+const resolveWritableBaseDir = () => {
+  fs.mkdirSync(PRIMARY_UPLOAD_DIR, { recursive: true });
+  fs.accessSync(PRIMARY_UPLOAD_DIR, fs.constants.W_OK);
+  return PRIMARY_UPLOAD_DIR;
+};
 
 // Ensure upload directory exists
 const ensureUploadDir = (email) => {
-  const userDir = path.join(UPLOAD_DIR, email);
-  if (!fs.existsSync(userDir)) {
-    fs.mkdirSync(userDir, { recursive: true });
-  }
-  return userDir;
+  const baseDir = resolveWritableBaseDir();
+  const safeEmailDir = email.replace(/[^a-zA-Z0-9@._-]/g, "_");
+  const userDir = path.join(baseDir, safeEmailDir);
+  fs.mkdirSync(userDir, { recursive: true });
+  return { userDir, baseDir };
 };
 
 export const uploadFile = async (req, res) => {
@@ -27,7 +29,7 @@ export const uploadFile = async (req, res) => {
     }
 
     // Ensure user directory exists
-    const userDir = ensureUploadDir(email);
+    const { userDir, baseDir } = ensureUploadDir(email);
 
     // Generate unique filename
     const timestamp = Date.now();
@@ -62,10 +64,16 @@ export const uploadFile = async (req, res) => {
         filename: file.originalname,
         size: file.size,
         uploadDate: new Date().toISOString(),
+        storageBaseDir: baseDir,
       },
     });
   } catch (error) {
     console.error("File upload error:", error);
+    if (error?.code === "EACCES") {
+      return res.status(500).json({
+        message: "Upload directory permission denied on master node.",
+      });
+    }
     return res.status(500).json({ message: "File upload failed." });
   }
 };
