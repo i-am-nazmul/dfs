@@ -7,6 +7,7 @@ import axios from "axios";
 
 interface File {
   fileId: string;
+  storedFilename?: string;
   filename: string;
   fileSize: number;
   fileType: string;
@@ -85,6 +86,25 @@ export default function DashboardPage() {
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
+    }
+  };
+
+  const handleDeleteFile = async (file: File) => {
+    const toastId = toast.loading("Deleting file...");
+
+    try {
+      const response = await axios.delete("/api/files", {
+        data: { storedFilename: file.storedFilename, filename: file.filename },
+        withCredentials: true,
+      });
+
+      setFiles(response.data.files || []);
+      toast.success(response.data.message || "File deleted successfully.", { id: toastId });
+    } catch (error) {
+      const errorMessage = axios.isAxiosError(error)
+        ? error.response?.data?.message ?? "File deletion failed."
+        : "Unable to reach server.";
+      toast.error(errorMessage, { id: toastId });
     }
   };
 
@@ -174,6 +194,12 @@ export default function DashboardPage() {
                   <p className="text-xs text-gray-400 mt-1">
                     {formatDate(file.uploadDate)}
                   </p>
+                  <button
+                    onClick={() => handleDeleteFile(file)}
+                    className="mt-2 text-xs font-medium text-red-600 hover:text-red-700"
+                  >
+                    Delete
+                  </button>
                 </div>
               ))}
             </div>

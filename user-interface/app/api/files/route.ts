@@ -68,3 +68,69 @@ export async function GET(request: NextRequest) {
     );
   }
 }
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const tokenCookie = request.cookies.get("ui_token")?.value;
+    if (!tokenCookie) {
+      return NextResponse.json({ message: "Unauthorized. Please login." }, { status: 401 });
+    }
+
+    const decoded = jwtVerify(tokenCookie);
+    if (!decoded || !decoded.email) {
+      return NextResponse.json({ message: "Invalid token." }, { status: 401 });
+    }
+
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ message: "Invalid JSON body." }, { status: 400 });
+    }
+
+    const storedFilename = body?.storedFilename?.toString()?.trim();
+    const filename = body?.filename?.toString()?.trim();
+    if (!storedFilename && !filename) {
+      return NextResponse.json({ message: "storedFilename or filename is required." }, { status: 400 });
+    }
+
+    const userEmail = decoded.email;
+    const masterBaseUrl = process.env.MASTER_BASE_URL;
+    const apiKey = process.env.API_KEY;
+
+    if (!masterBaseUrl || !apiKey) {
+      return NextResponse.json({ message: "Server configuration is incomplete." }, { status: 500 });
+    }
+
+    const masterResponse = await fetch(`${masterBaseUrl}/files/delete`, {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+      },
+      body: JSON.stringify({ email: userEmail, storedFilename, filename }),
+    });
+
+    const responseData = (await masterResponse.json().catch(() => null)) as any;
+
+    if (!masterResponse.ok) {
+      return NextResponse.json(
+        { message: responseData?.message ?? "Failed to delete file." },
+        { status: masterResponse.status }
+      );
+    }
+
+    return NextResponse.json(
+      {
+        message: responseData?.message ?? "File deleted successfully.",
+        files: responseData?.files ?? [],
+        count: responseData?.count ?? 0,
+        fileNames: responseData?.fileNames ?? [],
+      },
+      { status: 200 }
+    );
+  } catch (error) {
+    console.error("Delete file proxy error:", error);
+    return NextResponse.json({ message: "Failed to delete file." }, { status: 500 });
+  }
+}
