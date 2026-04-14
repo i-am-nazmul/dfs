@@ -1,66 +1,52 @@
-import {
-  PutItemCommand,
-  ScanCommand,
-  DeleteItemCommand,
-} from "@aws-sdk/client-dynamodb";
-import { dynamoClient } from "../connectDB/dynamodb.js";
-import fs from "fs";
-import path from "path";
-const PRIMARY_UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(process.cwd(), "files");
+const WORKER1_BASE_URL = process.env.WORKER1_BASE_URL || "http://10.0.2.50:5000";
+const CHUNK_SIZE_BYTES = 512 * 1024;
 
 const logEvent = (message) => {
   const at = new Date().toLocaleString("en-IN", { hour12: true });
   console.log(`[MASTER] ${at} | ${message}`);
 };
 
-const resolveWritableBaseDir = () => {
-  fs.mkdirSync(PRIMARY_UPLOAD_DIR, { recursive: true });
-  fs.accessSync(PRIMARY_UPLOAD_DIR, fs.constants.W_OK);
-  return PRIMARY_UPLOAD_DIR;
+const buildWorkerUrl = (pathWithLeadingSlash) => `${WORKER1_BASE_URL}${pathWithLeadingSlash}`;
+
+const parseJsonSafe = async (response) => {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
 };
 
-// Ensure upload directory exists
-const ensureUploadDir = (email) => {
-  const baseDir = resolveWritableBaseDir();
-  const safeEmailDir = email.replace(/[^a-zA-Z0-9@._-]/g, "_");
-  const userDir = path.join(baseDir, safeEmailDir);
-  fs.mkdirSync(userDir, { recursive: true });
-  return { userDir, baseDir };
-};
-
-const getUserDir = (email) => {
-  const baseDir = resolveWritableBaseDir();
-  const safeEmailDir = email.replace(/[^a-zA-Z0-9@._-]/g, "_");
-  return path.join(baseDir, safeEmailDir);
-};
-
-const formatFilenameForUi = (storedFilename) => storedFilename.replace(/^\d+-/, "");
-
-const listFilesFromDisk = (email) => {
-  const userDir = getUserDir(email);
-  if (!fs.existsSync(userDir)) {
-    return [];
+const resolveFileForWorker = async (email, storedFilename, filename) => {
+  const query = new URLSearchParams({ email });
+  if (storedFilename) {
+    query.set("storedFilename", storedFilename);
+  }
+  if (filename) {
+    query.set("filename", filename);
   }
 
-  return fs
-    .readdirSync(userDir)
-    .filter((entry) => {
-      const fullPath = path.join(userDir, entry);
-      return fs.existsSync(fullPath) && fs.statSync(fullPath).isFile();
-    })
-    .map((storedFilename) => {
-      const fullPath = path.join(userDir, storedFilename);
-      const stats = fs.statSync(fullPath);
-      return {
-        fileId: `${email}-${storedFilename}`,
-        storedFilename,
-        filename: formatFilenameForUi(storedFilename),
-        fileSize: stats.size,
-        fileType: "application/octet-stream",
-        uploadDate: stats.mtime.toISOString(),
-      };
-    })
-    .sort((a, b) => new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime());
+  const response = await fetch(buildWorkerUrl(`/files/resolve?${query.toString()}`), {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+
+  const data = await parseJsonSafe(response);
+  if (!response.ok) {
+    const message = data?.message || "Failed to resolve file on worker.";
+    const error = new Error(message);
+    error.statusCode = response.status;
+    throw error;
+  }
+
+  if (!data?.file) {
+    const error = new Error("Worker returned empty file metadata.");
+    error.statusCode = 502;
+    throw error;
+  }
+
+  return data.file;
 };
 
 export const uploadFile = async (req, res) => {
@@ -72,54 +58,59 @@ export const uploadFile = async (req, res) => {
       return res.status(400).json({ message: "Email and file are required." });
     }
 
-    // Ensure user directory exists
-    const { userDir, baseDir } = ensureUploadDir(email);
-
-    // Generate unique filename
     const timestamp = Date.now();
-    const filename = `${timestamp}-${file.originalname}`;
-    const filepath = path.join(userDir, filename);
+    const entropy = Math.random().toString(36).slice(2, 8);
+    const fileId = `${email}-${timestamp}-${entropy}`;
+    const storedFilename = `${timestamp}-${file.originalname}`;
+    const totalChunks = Math.max(1, Math.ceil(file.buffer.length / CHUNK_SIZE_BYTES));
 
-    // Save file to disk
-    fs.writeFileSync(filepath, file.buffer);
-    logEvent(`User ${email} uploaded file \"${file.originalname}\" to ${filepath}`);
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+      const start = chunkIndex * CHUNK_SIZE_BYTES;
+      const end = Math.min(start + CHUNK_SIZE_BYTES, file.buffer.length);
+      const chunkBuffer = file.buffer.subarray(start, end);
 
-    // Store metadata in DynamoDB
-    const fileId = `${email}-${timestamp}`;
-    const params = {
-      TableName: "Files",
-      Item: {
-        fileId: { S: fileId },
-        email: { S: email },
-        filename: { S: file.originalname },
-        storedFilename: { S: filename },
-        fileSize: { N: String(file.size) },
-        fileType: { S: file.mimetype },
-        uploadDate: { S: new Date().toISOString() },
-        filePath: { S: filepath },
-      },
-    };
+      const workerResponse = await fetch(buildWorkerUrl("/chunks"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email,
+          fileId,
+          filename: file.originalname,
+          storedFilename,
+          fileType: file.mimetype || "application/octet-stream",
+          fileSize: file.size,
+          totalChunks,
+          chunkIndex,
+          chunkData: chunkBuffer.toString("base64"),
+        }),
+      });
 
-    await dynamoClient.send(new PutItemCommand(params));
+      if (!workerResponse.ok) {
+        const workerError = await parseJsonSafe(workerResponse);
+        return res.status(workerResponse.status).json({
+          message: workerError?.message || "Worker failed to store file chunk.",
+        });
+      }
+    }
+
+    logEvent(`User ${email} uploaded "${file.originalname}" to worker1 in ${totalChunks} chunk(s)`);
 
     return res.status(200).json({
       message: "File uploaded successfully.",
       file: {
         fileId,
         filename: file.originalname,
+        storedFilename,
         size: file.size,
         uploadDate: new Date().toISOString(),
-        storageBaseDir: baseDir,
+        totalChunks,
       },
     });
   } catch (error) {
     console.error("File upload error:", error);
     logEvent(`Upload failed for ${req.body?.email || "unknown user"}: ${error?.message || "unknown error"}`);
-    if (error?.code === "EACCES") {
-      return res.status(500).json({
-        message: "Upload directory permission denied on master node.",
-      });
-    }
     return res.status(500).json({ message: "File upload failed." });
   }
 };
@@ -132,12 +123,24 @@ export const getUserFiles = async (req, res) => {
       return res.status(400).json({ message: "Email is required." });
     }
 
-    const files = listFilesFromDisk(email);
+    const response = await fetch(buildWorkerUrl(`/files?email=${encodeURIComponent(email)}`), {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    const data = await parseJsonSafe(response);
+    if (!response.ok) {
+      return res.status(response.status).json({ message: data?.message || "Failed to retrieve files." });
+    }
+
+    const files = data?.files || [];
     logEvent(`User ${email} fetched files list (${files.length} files)`);
 
     return res.status(200).json({
       files,
-      count: files.length,
+      count: Number(data?.count) || files.length,
     });
   } catch (error) {
     console.error("Get files error:", error);
@@ -155,70 +158,25 @@ export const deleteUserFile = async (req, res) => {
       return res.status(400).json({ message: "Email and storedFilename or filename are required." });
     }
 
-    const userDir = getUserDir(email);
-    const filesOnDisk = fs.existsSync(userDir) ? fs.readdirSync(userDir) : [];
+    const response = await fetch(buildWorkerUrl("/files"), {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email, storedFilename, filename }),
+    });
 
-    let resolvedStoredFilename = storedFilename;
-    if (!resolvedStoredFilename && filename) {
-      resolvedStoredFilename = filesOnDisk.find(
-        (entry) => entry === filename || entry.endsWith(`-${filename}`)
-      );
+    const data = await parseJsonSafe(response);
+    if (!response.ok) {
+      return res.status(response.status).json({ message: data?.message || "File deletion failed." });
     }
 
-    if (!resolvedStoredFilename) {
-      return res.status(404).json({ message: "File not found." });
-    }
-
-    const targetPath = path.join(userDir, resolvedStoredFilename);
-
-    if (!targetPath.startsWith(userDir)) {
-      return res.status(400).json({ message: "Invalid file path." });
-    }
-
-    if (!fs.existsSync(targetPath)) {
-      return res.status(404).json({ message: "File not found." });
-    }
-
-    fs.unlinkSync(targetPath);
-    logEvent(`User ${email} deleted file \"${resolvedStoredFilename}\"`);
-
-    // Best-effort DynamoDB cleanup for historical records.
-    const scanResult = await dynamoClient.send(
-      new ScanCommand({
-        TableName: "Files",
-        FilterExpression: "#email = :email AND #storedFilename = :storedFilename",
-        ExpressionAttributeNames: {
-          "#email": "email",
-          "#storedFilename": "storedFilename",
-        },
-        ExpressionAttributeValues: {
-          ":email": { S: email },
-          ":storedFilename": { S: resolvedStoredFilename },
-        },
-        Limit: 1,
-      })
-    );
-
-    const matched = scanResult.Items?.[0];
-    const fileId = matched?.fileId?.S;
-    if (fileId) {
-      await dynamoClient.send(
-        new DeleteItemCommand({
-          TableName: "Files",
-          Key: {
-            fileId: { S: fileId },
-          },
-        })
-      );
-    }
-
-    const files = listFilesFromDisk(email);
-
+    logEvent(`User ${email} deleted file "${storedFilename || filename}" from worker1`);
     return res.status(200).json({
-      message: "File deleted successfully.",
-      files,
-      count: files.length,
-      fileNames: files.map((file) => file.filename),
+      message: data?.message || "File deleted successfully.",
+      files: data?.files || [],
+      count: Number(data?.count) || 0,
+      fileNames: data?.fileNames || [],
     });
   } catch (error) {
     console.error("Delete file error:", error);
@@ -237,35 +195,47 @@ export const downloadUserFile = async (req, res) => {
       return res.status(400).json({ message: "Email and storedFilename or filename are required." });
     }
 
-    const userDir = getUserDir(email);
-    const filesOnDisk = fs.existsSync(userDir) ? fs.readdirSync(userDir) : [];
+    const metadata = await resolveFileForWorker(email, storedFilename, filename);
+    const totalChunks = Number(metadata.totalChunks);
 
-    let resolvedStoredFilename = storedFilename;
-    if (!resolvedStoredFilename && filename) {
-      resolvedStoredFilename = filesOnDisk.find(
-        (entry) => entry === filename || entry.endsWith(`-${filename}`)
+    if (!Number.isInteger(totalChunks) || totalChunks <= 0) {
+      return res.status(500).json({ message: "Invalid chunk metadata from worker." });
+    }
+
+    const buffers = [];
+
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+      const chunkResponse = await fetch(
+        buildWorkerUrl(
+          `/chunks/${encodeURIComponent(metadata.fileId)}/${chunkIndex}?email=${encodeURIComponent(email)}`
+        ),
+        { method: "GET" }
       );
+
+      if (!chunkResponse.ok) {
+        const chunkError = await parseJsonSafe(chunkResponse);
+        return res.status(chunkResponse.status).json({
+          message: chunkError?.message || `Failed to fetch chunk ${chunkIndex} from worker.`,
+        });
+      }
+
+      const chunkArrayBuffer = await chunkResponse.arrayBuffer();
+      buffers.push(Buffer.from(chunkArrayBuffer));
     }
 
-    if (!resolvedStoredFilename) {
-      return res.status(404).json({ message: "File not found." });
-    }
+    const combinedBuffer = Buffer.concat(buffers);
+    const downloadName = metadata.filename || filename || storedFilename || "download.bin";
 
-    const targetPath = path.join(userDir, resolvedStoredFilename);
-    if (!targetPath.startsWith(userDir)) {
-      return res.status(400).json({ message: "Invalid file path." });
-    }
+    logEvent(`User ${email} downloaded file "${downloadName}" from worker1 in ${totalChunks} chunk(s)`);
 
-    if (!fs.existsSync(targetPath)) {
-      return res.status(404).json({ message: "File not found." });
-    }
-
-    const downloadName = formatFilenameForUi(resolvedStoredFilename);
-    logEvent(`User ${email} downloaded file \"${downloadName}\"`);
-    return res.download(targetPath, downloadName);
+    res.setHeader("Content-Type", metadata.fileType || "application/octet-stream");
+    res.setHeader("Content-Length", String(combinedBuffer.length));
+    res.attachment(downloadName);
+    return res.status(200).send(combinedBuffer);
   } catch (error) {
     console.error("Download file error:", error);
     logEvent(`Download failed for ${req.query?.email || "unknown user"}: ${error?.message || "unknown error"}`);
-    return res.status(500).json({ message: "File download failed." });
+    const statusCode = Number(error?.statusCode) || 500;
+    return res.status(statusCode).json({ message: error?.message || "File download failed." });
   }
 };
