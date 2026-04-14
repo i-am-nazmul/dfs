@@ -1,7 +1,7 @@
 {
-  "name": "worker1",
+  "name": "worker3",
   "version": "1.0.0",
-  "description": "Chunk storage worker 1",
+  "description": "Chunk storage worker 3",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
