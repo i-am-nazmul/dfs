@@ -8,11 +8,13 @@ import { dynamoClient } from "../connectDB/dynamodb.js";
 
 const CHUNK_SIZE_BYTES = 512 * 1024;
 const REPLICATION_FACTOR = 2;
+const WORKER_HEALTH_TIMEOUT_MS = 2500;
+const WORKER_IO_TIMEOUT_MS = 8000;
 
 const workers = [
   { id: "worker1", baseUrl: process.env.WORKER1_BASE_URL || "http://10.0.2.50:5000" },
-  { id: "worker2", baseUrl: process.env.WORKER2_BASE_URL || "http://10.0.2.51:5001" },
-  { id: "worker3", baseUrl: process.env.WORKER3_BASE_URL || "http://10.0.2.52:5002" },
+  { id: "worker2", baseUrl: process.env.WORKER2_BASE_URL || "http://10.0.2.168:5001" },
+  { id: "worker3", baseUrl: process.env.WORKER3_BASE_URL || "http://10.0.2.251:5002" },
 ];
 
 const workerById = new Map(workers.map((worker) => [worker.id, worker]));
@@ -53,16 +55,42 @@ const normalizeChunkItem = (item) => ({
   chunkSize: safeNumber(item.chunkSize?.N, 0),
 });
 
-const chooseReplicaWorkers = (chunkIndex) => {
-  const totalWorkers = workers.length;
+const chooseReplicaWorkers = (chunkIndex, workerPool) => {
+  const totalWorkers = workerPool.length;
   const selected = [];
 
   for (let offset = 0; offset < REPLICATION_FACTOR; offset += 1) {
     const index = (chunkIndex + offset) % totalWorkers;
-    selected.push(workers[index]);
+    selected.push(workerPool[index]);
   }
 
   return selected;
+};
+
+const isWorkerReachable = async (worker) => {
+  try {
+    const response = await fetch(`${worker.baseUrl}/test`, {
+      method: "GET",
+      signal: AbortSignal.timeout(WORKER_HEALTH_TIMEOUT_MS),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
+
+const getReachableWorkers = async () => {
+  const checks = await Promise.all(
+    workers.map(async (worker) => ({
+      ...worker,
+      reachable: await isWorkerReachable(worker),
+    }))
+  );
+
+  return {
+    reachable: checks.filter((entry) => entry.reachable),
+    unreachable: checks.filter((entry) => !entry.reachable),
+  };
 };
 
 const resolveFileFromDb = async (email, storedFilename, filename) => {
@@ -140,6 +168,7 @@ const fetchChunkFromAnyReplica = async (email, fileId, chunkIndex, workerIds) =>
         `${worker.baseUrl}/chunks/${encodeURIComponent(fileId)}/${chunkIndex}?email=${encodeURIComponent(email)}`,
         {
           method: "GET",
+          signal: AbortSignal.timeout(WORKER_IO_TIMEOUT_MS),
         }
       );
 
@@ -172,16 +201,26 @@ export const uploadFile = async (req, res) => {
     const storedFilename = `${timestamp}-${file.originalname}`;
     const totalChunks = Math.max(1, Math.ceil(file.buffer.length / CHUNK_SIZE_BYTES));
     const uploadDate = new Date().toISOString();
+    const { reachable, unreachable } = await getReachableWorkers();
+
+    if (reachable.length < REPLICATION_FACTOR) {
+      return res.status(503).json({
+        message: `At least ${REPLICATION_FACTOR} workers must be reachable for upload.`,
+        reachableWorkers: reachable.map((worker) => worker.id),
+        unreachableWorkers: unreachable.map((worker) => worker.id),
+      });
+    }
 
     for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
       const start = chunkIndex * CHUNK_SIZE_BYTES;
       const end = Math.min(start + CHUNK_SIZE_BYTES, file.buffer.length);
       const chunkBuffer = file.buffer.subarray(start, end);
-      const replicaWorkers = chooseReplicaWorkers(chunkIndex);
+      const replicaWorkers = chooseReplicaWorkers(chunkIndex, reachable);
 
       for (const worker of replicaWorkers) {
         const response = await fetch(`${worker.baseUrl}/chunks`, {
           method: "POST",
+          signal: AbortSignal.timeout(WORKER_IO_TIMEOUT_MS),
           headers: {
             "Content-Type": "application/json",
           },
@@ -301,6 +340,7 @@ export const deleteUserFile = async (req, res) => {
       try {
         await fetch(`${worker.baseUrl}/files/by-id`, {
           method: "DELETE",
+          signal: AbortSignal.timeout(WORKER_IO_TIMEOUT_MS),
           headers: {
             "Content-Type": "application/json",
           },
