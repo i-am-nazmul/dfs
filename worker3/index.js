@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 
 const app = express();
-const PORT = Number(process.env.PORT) || 5002;
+const PORT = Number(process.env.PORT) || 5000;
 const CHUNK_SIZE_BYTES = 512 * 1024;
 const CHUNKS_BASE_DIR = process.env.CHUNKS_DIR || path.join(process.cwd(), "filechunks");
 

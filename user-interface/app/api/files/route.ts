@@ -1,6 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "@/lib/jwt";
 
+type FilesProxyResponse = {
+  message?: string;
+  files?: Array<{
+    fileId: string;
+    storedFilename?: string;
+    filename: string;
+    fileSize: number;
+    fileType: string;
+    uploadDate: string;
+  }>;
+  count?: number;
+  fileNames?: string[];
+};
+
 export async function GET(request: NextRequest) {
   try {
     // Get and verify JWT token from cookies
@@ -43,7 +57,9 @@ export async function GET(request: NextRequest) {
       }
     );
 
-    const responseData = (await masterResponse.json().catch(() => null)) as any;
+    const responseData = (await masterResponse
+      .json()
+      .catch(() => null)) as FilesProxyResponse | null;
 
     if (!masterResponse.ok) {
       return NextResponse.json(
@@ -111,7 +127,9 @@ export async function DELETE(request: NextRequest) {
       body: JSON.stringify({ email: userEmail, storedFilename, filename }),
     });
 
-    const responseData = (await masterResponse.json().catch(() => null)) as any;
+    const responseData = (await masterResponse
+      .json()
+      .catch(() => null)) as FilesProxyResponse | null;
 
     if (!masterResponse.ok) {
       return NextResponse.json(

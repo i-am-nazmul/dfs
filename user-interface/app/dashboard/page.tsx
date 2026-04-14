@@ -14,6 +14,28 @@ interface File {
   uploadDate: string;
 }
 
+interface ChunkInfo {
+  chunkIndex: number;
+  chunkSize: number;
+  workers: string[];
+}
+
+interface FileChunkDetails {
+  file: {
+    fileId: string;
+    filename: string;
+    storedFilename: string;
+    fileSize: number;
+    totalChunks: number;
+    uploadDate: string;
+  };
+  replicationFactor: number;
+  chunkCount: number;
+  isComplete: boolean;
+  hasRequiredReplicas: boolean;
+  chunks: ChunkInfo[];
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -21,6 +43,9 @@ export default function DashboardPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
   const [username, setUsername] = useState("User");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [fileChunkDetails, setFileChunkDetails] = useState<FileChunkDetails | null>(null);
+  const [isLoadingChunkInfo, setIsLoadingChunkInfo] = useState(false);
 
   // Fetch user files on mount
   useEffect(() => {
@@ -106,6 +131,37 @@ export default function DashboardPage() {
         : "Unable to reach server.";
       toast.error(errorMessage, { id: toastId });
     }
+  };
+
+  const handleOpenFileDetails = async (file: File) => {
+    setSelectedFile(file);
+    setFileChunkDetails(null);
+    setIsLoadingChunkInfo(true);
+
+    try {
+      const response = await axios.get("/api/files/chunk-info", {
+        params: {
+          storedFilename: file.storedFilename,
+          filename: file.filename,
+        },
+        withCredentials: true,
+      });
+
+      setFileChunkDetails(response.data);
+    } catch (error) {
+      const errorMessage = axios.isAxiosError(error)
+        ? error.response?.data?.message ?? "Failed to load chunk information."
+        : "Unable to reach server.";
+      toast.error(errorMessage);
+    } finally {
+      setIsLoadingChunkInfo(false);
+    }
+  };
+
+  const handleCloseFileDetails = () => {
+    setSelectedFile(null);
+    setFileChunkDetails(null);
+    setIsLoadingChunkInfo(false);
   };
 
   const handleDownloadFile = async (file: File) => {
@@ -226,7 +282,8 @@ export default function DashboardPage() {
               {files.map((file) => (
                 <div
                   key={file.fileId}
-                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:border-emerald-300 hover:bg-emerald-50 transition-colors"
+                  className="p-3 bg-gray-50 rounded-lg border border-gray-200 hover:border-emerald-300 hover:bg-emerald-50 transition-colors cursor-pointer"
+                  onClick={() => handleOpenFileDetails(file)}
                 >
                   <p className="font-semibold text-gray-800 text-sm truncate" title={file.filename}>
                     {file.filename}
@@ -238,13 +295,19 @@ export default function DashboardPage() {
                     {formatDate(file.uploadDate)}
                   </p>
                   <button
-                    onClick={() => handleDownloadFile(file)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleDownloadFile(file);
+                    }}
                     className="mt-2 mr-3 text-xs font-medium text-emerald-700 hover:text-emerald-800"
                   >
                     Download
                   </button>
                   <button
-                    onClick={() => handleDeleteFile(file)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleDeleteFile(file);
+                    }}
                     className="mt-2 text-xs font-medium text-red-600 hover:text-red-700"
                   >
                     Delete
@@ -255,6 +318,87 @@ export default function DashboardPage() {
           )}
         </div>
       </div>
+
+      {selectedFile && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
+          onClick={handleCloseFileDetails}
+        >
+          <div
+            className="w-full max-w-4xl rounded-xl bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+              <h3 className="text-xl font-bold text-gray-800">File Chunk Details</h3>
+              <button
+                onClick={handleCloseFileDetails}
+                className="rounded-md border border-gray-300 px-3 py-1 text-sm text-gray-700 hover:bg-gray-100"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="space-y-4 px-6 py-5">
+              <div className="grid grid-cols-1 gap-3 text-sm text-gray-700 md:grid-cols-3">
+                <div>
+                  <p className="font-semibold">Filename</p>
+                  <p className="truncate" title={selectedFile.filename}>{selectedFile.filename}</p>
+                </div>
+                <div>
+                  <p className="font-semibold">Size</p>
+                  <p>{formatFileSize(selectedFile.fileSize)}</p>
+                </div>
+                <div>
+                  <p className="font-semibold">Uploaded</p>
+                  <p>{formatDate(selectedFile.uploadDate)}</p>
+                </div>
+              </div>
+
+              {isLoadingChunkInfo ? (
+                <p className="py-10 text-center text-gray-500">Loading chunk metadata...</p>
+              ) : !fileChunkDetails ? (
+                <p className="py-10 text-center text-red-600">Unable to load chunk details.</p>
+              ) : (
+                <>
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
+                    <p>
+                      Chunks: <span className="font-semibold">{fileChunkDetails.chunkCount}</span> | Replication factor:{" "}
+                      <span className="font-semibold">{fileChunkDetails.replicationFactor}</span> | Complete:{" "}
+                      <span className={`font-semibold ${fileChunkDetails.isComplete ? "text-emerald-700" : "text-amber-700"}`}>
+                        {fileChunkDetails.isComplete ? "Yes" : "No"}
+                      </span> | Fault-tolerant:{" "}
+                      <span className={`font-semibold ${fileChunkDetails.hasRequiredReplicas ? "text-emerald-700" : "text-red-600"}`}>
+                        {fileChunkDetails.hasRequiredReplicas ? "Yes" : "No"}
+                      </span>
+                    </p>
+                  </div>
+
+                  <div className="max-h-96 overflow-auto rounded-lg border border-gray-200">
+                    <table className="min-w-full text-sm">
+                      <thead className="sticky top-0 bg-gray-100 text-gray-700">
+                        <tr>
+                          <th className="px-4 py-2 text-left font-semibold">Chunk #</th>
+                          <th className="px-4 py-2 text-left font-semibold">Chunk Size</th>
+                          <th className="px-4 py-2 text-left font-semibold">Stored Workers</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {fileChunkDetails.chunks.map((chunk) => (
+                          <tr key={chunk.chunkIndex} className="border-t border-gray-200 hover:bg-gray-50">
+                            <td className="px-4 py-2">{chunk.chunkIndex}</td>
+                            <td className="px-4 py-2">{formatFileSize(chunk.chunkSize)}</td>
+                            <td className="px-4 py-2">{chunk.workers.join(", ")}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

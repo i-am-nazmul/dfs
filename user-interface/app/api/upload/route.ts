@@ -2,6 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { jwtVerify } from "@/lib/jwt";
 
+type UploadProxyResponse = {
+  message?: string;
+  file?: {
+    fileId: string;
+    filename: string;
+    storedFilename: string;
+    size: number;
+    uploadDate: string;
+    totalChunks: number;
+  };
+};
+
 export async function POST(request: NextRequest) {
   // Get client IP for rate limiting
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
@@ -78,7 +90,9 @@ export async function POST(request: NextRequest) {
       body: masterFormData,
     });
 
-    const responseData = (await masterResponse.json().catch(() => null)) as any;
+    const responseData = (await masterResponse
+      .json()
+      .catch(() => null)) as UploadProxyResponse | null;
 
     if (!masterResponse.ok) {
       return NextResponse.json(

@@ -156,6 +156,13 @@ const listChunkRows = async (fileId) => {
   return (query.Items || []).map(normalizeChunkItem).sort((a, b) => a.chunkIndex - b.chunkIndex);
 };
 
+const validateChunkReplication = (chunkRows) => {
+  return chunkRows.every((row) => {
+    const uniqueWorkers = [...new Set(row.workers)];
+    return uniqueWorkers.length >= REPLICATION_FACTOR;
+  });
+};
+
 const fetchChunkFromAnyReplica = async (email, fileId, chunkIndex, workerIds) => {
   for (const workerId of workerIds) {
     const worker = workerById.get(workerId);
@@ -219,6 +226,13 @@ export const uploadFile = async (req, res) => {
       const end = Math.min(start + CHUNK_SIZE_BYTES, file.buffer.length);
       const chunkBuffer = file.buffer.subarray(start, end);
       const replicaWorkers = chooseReplicaWorkers(chunkIndex, reachable);
+      const uniqueReplicaWorkers = [...new Set(replicaWorkers.map((worker) => worker.id))];
+
+      if (uniqueReplicaWorkers.length !== REPLICATION_FACTOR) {
+        return res.status(500).json({
+          message: `Replication requirement failed for chunk ${chunkIndex}.`,
+        });
+      }
 
       for (const worker of replicaWorkers) {
         const response = await fetch(`${worker.baseUrl}/chunks`, {
@@ -249,7 +263,7 @@ export const uploadFile = async (req, res) => {
           Item: {
             fileId: { S: fileId },
             chunkIndex: { N: String(chunkIndex) },
-            workers: { SS: replicaWorkers.map((worker) => worker.id) },
+            workers: { SS: uniqueReplicaWorkers },
             chunkSize: { N: String(chunkBuffer.length) },
           },
         })
@@ -307,6 +321,54 @@ export const getUserFiles = async (req, res) => {
   } catch (error) {
     console.error("Get files error:", error);
     return res.status(500).json({ message: "Failed to retrieve files." });
+  }
+};
+
+export const getFileChunkInfo = async (req, res) => {
+  try {
+    const email = req.query?.email?.toString().trim();
+    const storedFilename = req.query?.storedFilename?.toString().trim();
+    const filename = req.query?.filename?.toString().trim();
+
+    if (!email || (!storedFilename && !filename)) {
+      return res.status(400).json({ message: "Email and storedFilename or filename are required." });
+    }
+
+    const file = await resolveFileFromDb(email, storedFilename, filename);
+    if (!file?.fileId) {
+      return res.status(404).json({ message: "File not found." });
+    }
+
+    const chunkRows = await listChunkRows(file.fileId);
+    if (!chunkRows.length) {
+      return res.status(404).json({ message: "No chunk metadata found for file." });
+    }
+
+    const hasRequiredReplicas = validateChunkReplication(chunkRows);
+    const isComplete = file.totalChunks > 0 && chunkRows.length === file.totalChunks;
+
+    return res.status(200).json({
+      file: {
+        fileId: file.fileId,
+        filename: file.filename,
+        storedFilename: file.storedFilename,
+        fileSize: file.fileSize,
+        totalChunks: file.totalChunks,
+        uploadDate: file.uploadDate,
+      },
+      replicationFactor: REPLICATION_FACTOR,
+      chunkCount: chunkRows.length,
+      isComplete,
+      hasRequiredReplicas,
+      chunks: chunkRows.map((row) => ({
+        chunkIndex: row.chunkIndex,
+        chunkSize: row.chunkSize,
+        workers: [...new Set(row.workers)],
+      })),
+    });
+  } catch (error) {
+    console.error("Get file chunk info error:", error);
+    return res.status(500).json({ message: "Failed to retrieve file chunk information." });
   }
 };
 
@@ -413,6 +475,11 @@ export const downloadUserFile = async (req, res) => {
     if (file.totalChunks > 0 && chunkRows.length !== file.totalChunks) {
       return res.status(500).json({
         message: "Chunk metadata is incomplete for this file.",
+      });
+    }
+    if (!validateChunkReplication(chunkRows)) {
+      return res.status(500).json({
+        message: `One or more chunks do not meet replication factor ${REPLICATION_FACTOR}.`,
       });
     }
 
