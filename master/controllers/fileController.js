@@ -204,6 +204,9 @@ export const uploadFile = async (req, res) => {
     const { reachable, unreachable } = await getReachableWorkers();
 
     if (reachable.length < REPLICATION_FACTOR) {
+      logEvent(
+        `Upload blocked: reachable=${reachable.map((worker) => `${worker.id}(${worker.baseUrl})`).join(",") || "none"} | unreachable=${unreachable.map((worker) => `${worker.id}(${worker.baseUrl})`).join(",") || "none"}`
+      );
       return res.status(503).json({
         message: `At least ${REPLICATION_FACTOR} workers must be reachable for upload.`,
         reachableWorkers: reachable.map((worker) => worker.id),
