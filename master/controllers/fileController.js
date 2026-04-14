@@ -13,8 +13,8 @@ const WORKER_IO_TIMEOUT_MS = 8000;
 
 const workers = [
   { id: "worker1", baseUrl: process.env.WORKER1_BASE_URL || "http://10.0.2.50:5000" },
-  { id: "worker2", baseUrl: process.env.WORKER2_BASE_URL || "http://10.0.2.168:5001" },
-  { id: "worker3", baseUrl: process.env.WORKER3_BASE_URL || "http://10.0.2.251:5002" },
+  { id: "worker2", baseUrl: process.env.WORKER2_BASE_URL || "http://10.0.2.168:5000" },
+  { id: "worker3", baseUrl: process.env.WORKER3_BASE_URL || "http://10.0.2.251:5000" },
 ];
 
 const workerById = new Map(workers.map((worker) => [worker.id, worker]));
