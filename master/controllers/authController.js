@@ -7,11 +7,7 @@ import {
 import { dynamoClient } from "../connectDB/dynamodb.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-
-const logEvent = (message) => {
-  const at = new Date().toLocaleString("en-IN", { hour12: true });
-  console.log(`[MASTER] ${at} | ${message}`);
-};
+import logger from "../utils/logger.js";
 
 const getJwtSecret = () => {
   const secret = process.env.JWT_SECRET;
@@ -73,7 +69,7 @@ export const signup = async (req, res) => {
     await dynamoClient.send(new PutItemCommand(params));
 
     const token = jwt.sign({ username, email }, getJwtSecret(), { expiresIn: "1h" });
-    logEvent(`New signup: username=${username}, email=${email}`);
+    logger.log(`User signup: email=${email}`);
 
     return res.status(201).json({
       message: "User registered successfully",
@@ -82,10 +78,10 @@ export const signup = async (req, res) => {
     });
   } catch (error) {
     if (error instanceof ConditionalCheckFailedException) {
-      logEvent(`Signup failed (duplicate email): ${req.body?.email || "unknown"}`);
+      logger.error(`Signup failed (duplicate email): ${req.body?.email || "unknown"}`);
       return res.status(409).json({ message: "Email already exists." });
     }
-    logEvent(`Signup failed: ${error?.message || "unknown error"}`);
+    logger.error(`Signup failed: ${error?.stack || error?.message || "unknown error"}`);
     return res.status(500).json({ message: "Signup failed." });
   }
 };
@@ -96,6 +92,7 @@ export const login = async (req, res) => {
     const username = req.body?.username?.trim();
     const email = req.body?.email?.trim();
     const password = req.body?.password?.trim();
+    logger.log(`Login attempt: ${email || username || "unknown"}`);
 
     if ((!username && !email) || !password) {
       return res.status(400).json({ message: "username or email, and password are required." });
@@ -132,7 +129,7 @@ export const login = async (req, res) => {
     }
 
     if (!userItem) {
-      logEvent(`Login failed (user not found): ${email || username || "unknown"}`);
+      logger.error(`Login failed (user not found): ${email || username || "unknown"}`);
       return res.status(401).json({ message: "Invalid credentials." });
     }
 
@@ -140,7 +137,7 @@ export const login = async (req, res) => {
     const isMatch = storedPassword ? await bcrypt.compare(password, storedPassword) : false;
 
     if (!isMatch) {
-      logEvent(`Login failed (password mismatch): ${email || username || "unknown"}`);
+      logger.error(`Login failed (password mismatch): ${email || username || "unknown"}`);
       return res.status(401).json({ message: "Invalid credentials." });
     }
 
@@ -149,7 +146,7 @@ export const login = async (req, res) => {
     const token = jwt.sign({ username: resolvedUsername, email: resolvedEmail }, getJwtSecret(), {
       expiresIn: "1h",
     });
-    logEvent(`Login success: username=${resolvedUsername}, email=${resolvedEmail}`);
+    logger.log(`Login success: username=${resolvedUsername}, email=${resolvedEmail}`);
 
     return res.status(200).json({
       message: "Login successful",
@@ -160,7 +157,7 @@ export const login = async (req, res) => {
       },
     });
   } catch (error) {
-    logEvent(`Login failed: ${error?.message || "unknown error"}`);
+    logger.error(`Login failed: ${error?.stack || error?.message || "unknown error"}`);
     return res.status(500).json({ message: "Login failed." });
   }
 };

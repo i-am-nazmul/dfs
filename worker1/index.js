@@ -6,8 +6,21 @@ const app = express();
 const PORT = Number(process.env.PORT) || 5000;
 const CHUNK_SIZE_BYTES = 512 * 1024;
 const CHUNKS_BASE_DIR = process.env.CHUNKS_DIR || path.join(process.cwd(), "filechunks");
+const WORKER_LOG_PATH = path.join(process.cwd(), "worker.log");
 
 app.use(express.json({ limit: "2mb" }));
+
+const log = (message) => {
+  const line = `[${new Date().toISOString()}] ${message}`;
+  console.log(line);
+  fs.appendFileSync(WORKER_LOG_PATH, `${line}\n`, "utf8");
+};
+
+const logError = (message) => {
+  const line = `[${new Date().toISOString()}] ERROR: ${message}`;
+  console.error(line);
+  fs.appendFileSync(WORKER_LOG_PATH, `${line}\n`, "utf8");
+};
 
 const sanitizeSegment = (value = "") => value.replace(/[^a-zA-Z0-9@._-]/g, "_");
 const encodeSegment = (value = "") => encodeURIComponent(value);
@@ -46,14 +59,16 @@ app.post("/chunks", (req, res) => {
     if (chunkBuffer.length > CHUNK_SIZE_BYTES) {
       return res.status(400).json({ message: "Chunk exceeds 0.5MB limit." });
     }
+    log(`Chunk received: email=${email}, fileId=${fileId}, chunkIndex=${chunkIndex}, size=${chunkBuffer.length}`);
 
     const chunkPath = getChunkPath(email, fileId, chunkIndex);
     fs.mkdirSync(path.dirname(chunkPath), { recursive: true });
     fs.writeFileSync(chunkPath, chunkBuffer);
+    log(`Chunk stored: ${chunkPath}`);
 
     return res.status(200).json({ message: "Chunk stored.", chunkIndex });
   } catch (error) {
-    console.error("Chunk store error:", error);
+    logError(`Chunk store error: ${error?.stack || error?.message || error}`);
     return res.status(500).json({ message: "Failed to store chunk." });
   }
 });
@@ -78,7 +93,7 @@ app.get("/chunks/:fileId/:chunkIndex", (req, res) => {
     res.setHeader("Content-Length", String(chunk.length));
     return res.status(200).send(chunk);
   } catch (error) {
-    console.error("Chunk read error:", error);
+    logError(`Chunk read error: ${error?.stack || error?.message || error}`);
     return res.status(500).json({ message: "Failed to fetch chunk." });
   }
 });
@@ -99,11 +114,11 @@ app.delete("/files/by-id", (req, res) => {
 
     return res.status(200).json({ message: "File chunks deleted." });
   } catch (error) {
-    console.error("File delete error:", error);
+    logError(`File delete error: ${error?.stack || error?.message || error}`);
     return res.status(500).json({ message: "Failed to delete file chunks." });
   }
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Worker running on PORT : ${PORT}`);
+  log(`Worker running on PORT : ${PORT}`);
 });

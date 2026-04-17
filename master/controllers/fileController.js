@@ -5,6 +5,7 @@ import {
   DeleteItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { dynamoClient } from "../connectDB/dynamodb.js";
+import logger from "../utils/logger.js";
 
 const CHUNK_SIZE_BYTES = 512 * 1024;
 const REPLICATION_FACTOR = 2;
@@ -18,11 +19,6 @@ const workers = [
 ];
 
 const workerById = new Map(workers.map((worker) => [worker.id, worker]));
-
-const logEvent = (message) => {
-  const at = new Date().toLocaleString("en-IN", { hour12: true });
-  console.log(`[MASTER] ${at} | ${message}`);
-};
 
 const parseJsonSafe = async (response) => {
   try {
@@ -201,17 +197,21 @@ export const uploadFile = async (req, res) => {
     if (!email || !file) {
       return res.status(400).json({ message: "Email and file are required." });
     }
+    logger.log(`File received from user: ${email}`);
 
     const timestamp = Date.now();
     const entropy = Math.random().toString(36).slice(2, 8);
     const fileId = `${email}-${timestamp}-${entropy}`;
     const storedFilename = `${timestamp}-${file.originalname}`;
+    const logicalStoragePath = `${email}/${storedFilename}`;
     const totalChunks = Math.max(1, Math.ceil(file.buffer.length / CHUNK_SIZE_BYTES));
     const uploadDate = new Date().toISOString();
     const { reachable, unreachable } = await getReachableWorkers();
+    logger.log(`File logical storage path: ${logicalStoragePath}`);
+    logger.log(`Chunking started for fileId=${fileId}, totalChunks=${totalChunks}`);
 
     if (reachable.length < REPLICATION_FACTOR) {
-      logEvent(
+      logger.error(
         `Upload blocked: reachable=${reachable.map((worker) => `${worker.id}(${worker.baseUrl})`).join(",") || "none"} | unreachable=${unreachable.map((worker) => `${worker.id}(${worker.baseUrl})`).join(",") || "none"}`
       );
       return res.status(503).json({
@@ -225,6 +225,7 @@ export const uploadFile = async (req, res) => {
       const start = chunkIndex * CHUNK_SIZE_BYTES;
       const end = Math.min(start + CHUNK_SIZE_BYTES, file.buffer.length);
       const chunkBuffer = file.buffer.subarray(start, end);
+      logger.log(`Chunk created: fileId=${fileId}, chunkIndex=${chunkIndex}, size=${chunkBuffer.length}`);
       const replicaWorkers = chooseReplicaWorkers(chunkIndex, reachable);
       const uniqueReplicaWorkers = [...new Set(replicaWorkers.map((worker) => worker.id))];
 
@@ -235,6 +236,7 @@ export const uploadFile = async (req, res) => {
       }
 
       for (const worker of replicaWorkers) {
+        logger.log(`Sending chunk ${chunkIndex} of fileId=${fileId} to worker=${worker.id}`);
         const response = await fetch(`${worker.baseUrl}/chunks`, {
           method: "POST",
           signal: AbortSignal.timeout(WORKER_IO_TIMEOUT_MS),
@@ -251,6 +253,9 @@ export const uploadFile = async (req, res) => {
 
         if (!response.ok) {
           const data = await parseJsonSafe(response);
+          logger.error(
+            `Worker failed storing chunk ${chunkIndex}: worker=${worker.id}, status=${response.status}, message=${data?.message || "unknown"}`
+          );
           return res.status(response.status).json({
             message: data?.message || `Failed to store chunk ${chunkIndex} on ${worker.id}.`,
           });
@@ -286,7 +291,7 @@ export const uploadFile = async (req, res) => {
       })
     );
 
-    logEvent(`User ${email} uploaded "${file.originalname}" with ${totalChunks} chunks and 2x replication`);
+    logger.log(`User ${email} uploaded "${file.originalname}" with ${totalChunks} chunks and 2x replication`);
 
     return res.status(200).json({
       message: "File uploaded successfully.",
@@ -301,7 +306,7 @@ export const uploadFile = async (req, res) => {
     });
   } catch (error) {
     console.error("File upload error:", error);
-    logEvent(`Upload failed for ${req.body?.email || "unknown user"}: ${error?.message || "unknown error"}`);
+    logger.error(`Upload failed for ${req.body?.email || "unknown user"}: ${error?.stack || error?.message || "unknown error"}`);
     return res.status(500).json({ message: "File upload failed." });
   }
 };
@@ -316,7 +321,7 @@ export const getUserFiles = async (req, res) => {
 
     const files = await listFilesForUser(email);
 
-    logEvent(`User ${email} fetched files list (${files.length} files)`);
+    logger.log(`User ${email} fetched files list (${files.length} files)`);
     return res.status(200).json({ files, count: files.length });
   } catch (error) {
     console.error("Get files error:", error);
@@ -438,7 +443,7 @@ export const deleteUserFile = async (req, res) => {
     );
 
     const files = await listFilesForUser(email);
-    logEvent(`User ${email} deleted file "${file.storedFilename}"`);
+    logger.log(`User ${email} deleted file "${file.storedFilename}"`);
 
     return res.status(200).json({
       message: "File deleted successfully.",
@@ -448,7 +453,7 @@ export const deleteUserFile = async (req, res) => {
     });
   } catch (error) {
     console.error("Delete file error:", error);
-    logEvent(`Delete failed for ${req.body?.email || "unknown user"}: ${error?.message || "unknown error"}`);
+    logger.error(`Delete failed for ${req.body?.email || "unknown user"}: ${error?.stack || error?.message || "unknown error"}`);
     return res.status(500).json({ message: "File deletion failed." });
   }
 };
@@ -497,7 +502,7 @@ export const downloadUserFile = async (req, res) => {
     const combined = Buffer.concat(chunkBuffers);
     const downloadName = file.filename || filename || storedFilename || "download.bin";
 
-    logEvent(`User ${email} downloaded file "${downloadName}" (${chunkRows.length} chunks)`);
+    logger.log(`User ${email} downloaded file "${downloadName}" (${chunkRows.length} chunks)`);
 
     res.setHeader("Content-Type", file.fileType || "application/octet-stream");
     res.setHeader("Content-Length", String(combined.length));
@@ -505,7 +510,7 @@ export const downloadUserFile = async (req, res) => {
     return res.status(200).send(combined);
   } catch (error) {
     console.error("Download file error:", error);
-    logEvent(`Download failed for ${req.query?.email || "unknown user"}: ${error?.message || "unknown error"}`);
+    logger.error(`Download failed for ${req.query?.email || "unknown user"}: ${error?.stack || error?.message || "unknown error"}`);
     return res.status(500).json({ message: "File download failed." });
   }
 };
