@@ -12,6 +12,22 @@ const REPLICATION_FACTOR = 2;
 const WORKER_HEALTH_TIMEOUT_MS = 2500;
 const WORKER_IO_TIMEOUT_MS = 8000;
 
+const getHumanTime = () =>
+  new Date().toLocaleString("en-IN", {
+    dateStyle: "medium",
+    timeStyle: "medium",
+    hour12: true,
+  });
+
+const resolveActorName = (req, email) => {
+  const usernameFromBody = req.body?.username?.toString().trim();
+  const usernameFromAuth = req.user?.username?.toString().trim();
+  if (usernameFromBody) return usernameFromBody;
+  if (usernameFromAuth) return usernameFromAuth;
+  if (email?.includes("@")) return email.split("@")[0];
+  return email || "unknown user";
+};
+
 const workers = [
   { id: "worker1", baseUrl: process.env.WORKER1_BASE_URL || "http://10.0.2.50:5000" },
   { id: "worker2", baseUrl: process.env.WORKER2_BASE_URL || "http://10.0.2.168:5000" },
@@ -204,6 +220,7 @@ export const uploadFile = async (req, res) => {
     const fileId = `${email}-${timestamp}-${entropy}`;
     const storedFilename = `${timestamp}-${file.originalname}`;
     const logicalStoragePath = `${email}/${storedFilename}`;
+    const actor = resolveActorName(req, email);
     const totalChunks = Math.max(1, Math.ceil(file.buffer.length / CHUNK_SIZE_BYTES));
     const uploadDate = new Date().toISOString();
     const { reachable, unreachable } = await getReachableWorkers();
@@ -291,7 +308,8 @@ export const uploadFile = async (req, res) => {
       })
     );
 
-    logger.log(`User ${email} uploaded "${file.originalname}" with ${totalChunks} chunks and 2x replication`);
+    logger.log(`${actor} uploaded "${file.originalname}" at ${getHumanTime()}`);
+    logger.log(`Upload details: ${actor} stored "${file.originalname}" as "${storedFilename}" with ${totalChunks} chunks (2x replication)`);
 
     return res.status(200).json({
       message: "File uploaded successfully.",
@@ -443,7 +461,9 @@ export const deleteUserFile = async (req, res) => {
     );
 
     const files = await listFilesForUser(email);
-    logger.log(`User ${email} deleted file "${file.storedFilename}"`);
+    const actor = resolveActorName(req, email);
+    const deletedName = file.filename || file.storedFilename;
+    logger.log(`${actor} deleted "${deletedName}" at ${getHumanTime()}`);
 
     return res.status(200).json({
       message: "File deleted successfully.",
