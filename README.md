@@ -1,206 +1,117 @@
- # Distributed File System (DFS) with Fault Tolerance
+# Distributed File System (DFS) with Fault Tolerance
 
-This repository contains a multi-service distributed file storage system with:
+This repository contains a 5-service distributed file storage system:
 
-- A master node for authentication, file metadata, chunk orchestration, and downloads
-- Three worker nodes that store replicated file chunks on local disk
-- A Next.js web UI that handles user login/signup and proxies requests to the master
+- 1 master service (metadata, auth, chunk orchestration)
+- 3 worker services (chunk storage on local disk)
+- 1 Next.js web app (UI + API proxy + cookie-based auth session)
 
-The design goal is to keep files available when a worker goes down by replicating every chunk across multiple workers.
+Each file is split into 0.5 MB chunks and replicated to 2 workers. The design target is availability during single-worker failure.
 
-## Contents
+## What Is Implemented
 
-1. Project Overview
-2. High-Level Architecture
-3. Repository Structure
-4. Data Model (DynamoDB)
-5. End-to-End Request Flows
-6. APIs
-7. Environment Variables
-8. Local Setup and Run Guide
-9. Operational Notes and Limitations
-10. Troubleshooting
-11. Future Improvements
+- User signup/login
+- Upload, list, download, and delete files
+- Chunk-level replication metadata visibility in dashboard
+- Upload guard: requires at least 2 reachable workers
+- Download fallback across chunk replicas
+- API-key validation between UI proxy and master
+- Basic rate limiting on master routes and selected UI routes
 
-## 1. Project Overview
-
-### What this project does
-
-- Users can sign up, log in, upload files, list files, inspect chunk placement, download files, and delete files.
-- The master service splits uploads into fixed-size chunks (0.5 MB each).
-- Each chunk is stored on 2 workers (replication factor = 2).
-- Chunk metadata and file metadata are saved in DynamoDB.
-- Download reconstructs the original file by reading chunks in order from any available replica.
-
-### Why this architecture
-
-- Reliability: if one worker is unavailable, replicas on other workers can still serve data.
-- Separation of concerns:
-  - Master: control plane + metadata
-  - Workers: data plane (chunk storage)
-  - UI: auth session and browser-facing APIs
-
-## 2. High-Level Architecture
+## Architecture
 
 ```
 Browser
   |
   v
-Next.js UI (user-interface)
-  - validates cookies/JWT
-  - rate limits some routes
-  - proxies requests with x-api-key
+Next.js app (user-interface)
+  - issues/verifies ui_token cookie
+  - proxies browser requests to master
+  - passes x-api-key header
   |
   v
 Master API (master)
   - auth + metadata + chunk orchestration
-  - stores metadata in DynamoDB
+  - DynamoDB metadata tables
   |
-  +--> Worker 1 (worker1) local disk chunks
-  +--> Worker 2 (worker2) local disk chunks
-  +--> Worker 3 (worker3) local disk chunks
+  +--> Worker 1 (worker1) local chunk files
+  +--> Worker 2 (worker2) local chunk files
+  +--> Worker 3 (worker3) local chunk files
 ```
 
-### Replication policy
+### Replication Policy
 
-- `CHUNK_SIZE_BYTES = 512 * 1024` (0.5 MB)
-- `REPLICATION_FACTOR = 2`
-- For each chunk index, 2 workers are selected (round-robin style from reachable workers).
+- Chunk size: `512 * 1024` bytes (0.5 MB)
+- Replication factor: `2`
+- Worker selection: deterministic round-robin over currently reachable workers
 
-## 3. Repository Structure
+## Repository Structure
 
-- `master/`: Express master node
-  - `controllers/authController.js`: signup/login logic
+- `master/`
+  - `index.js`: Express bootstrap + request logging + routes
+  - `controllers/authController.js`: signup/login against DynamoDB
   - `controllers/fileController.js`: upload/list/chunk-info/download/delete
-  - `middlewares/apiKeyMiddleware.js`: validates `x-api-key`
-  - `middlewares/rateLimitMiddleware.js`: global API limiter for routed endpoints
-  - `connectDB/dynamodb.js`: DynamoDB client
-- `worker1/`, `worker2/`, `worker3/`: chunk storage workers (same implementation)
-  - `index.js`: store/read/delete chunk files on disk
-- `user-interface/`: Next.js frontend + API routes
-  - `app/api/*`: server-side proxy routes to master
-  - `app/dashboard/page.tsx`: upload/list/download/delete UI
-  - `lib/jwt.ts`: signs and verifies `ui_token`
-  - `lib/rateLimit.ts`: in-memory UI-side route limiting
+  - `middlewares/apiKeyMiddleware.js`: enforces `x-api-key`
+  - `middlewares/rateLimitMiddleware.js`: route limiter (`60 req/min/IP`)
+  - `connectDB/dynamodb.js`: DynamoDB client (`region: ap-south-1`)
+- `worker1/`, `worker2/`, `worker3/`
+  - `index.js`: worker API to store/read/delete chunk files
+- `user-interface/`
+  - `app/api/*`: authenticated proxy routes from browser to master
+  - `app/dashboard/page.tsx`: upload/list/download/delete/chunk-inspect UI
+  - `components/Loader.tsx`, `components/ErrorAlert.tsx`: overlay UX
+  - `lib/jwt.ts`: signs/verifies `ui_token`
+  - `lib/rateLimit.ts`: in-memory limiter for selected routes
 
-## 4. Data Model (DynamoDB)
+## DynamoDB Data Model
 
-The implementation assumes these tables exist:
+The code expects the following tables.
 
 ### `Users`
 
-- Primary key: `email` (string)
-- Attributes: `username`, `password` (bcrypt hash)
-
-Notes:
-
-- Signup checks duplicate username via `Scan`.
-- Signup enforces unique email via conditional put (`attribute_not_exists(email)`).
+- Partition key: `email` (String)
+- Attributes used: `username`, `password` (bcrypt hash)
 
 ### `Files`
 
-- Primary key: `fileId` (string)
-- Attributes:
-  - `email`
-  - `filename`
-  - `storedFilename`
-  - `fileSize` (number)
-  - `fileType`
-  - `totalChunks` (number)
-  - `uploadDate`
-
-Notes:
-
-- User file listing is currently implemented via `Scan` filtered by `email`.
+- Partition key: `fileId` (String)
+- Attributes used: `email`, `filename`, `storedFilename`, `fileSize`, `fileType`, `totalChunks`, `uploadDate`
 
 ### `Chunks`
 
-- Composite primary key:
-  - Partition key: `fileId` (string)
-  - Sort key: `chunkIndex` (number)
-- Attributes:
-  - `workers` (string set)
-  - `chunkSize` (number)
+- Partition key: `fileId` (String)
+- Sort key: `chunkIndex` (Number)
+- Attributes used: `workers` (String Set), `chunkSize` (Number)
 
-Notes:
+## API Summary
 
-- Each row represents one chunk and all worker replicas storing it.
+### Master API
 
-## 5. End-to-End Request Flows
-
-### Signup/Login
-
-1. Browser calls Next API route (`/api/signup` or `/api/login`).
-2. Next route applies IP-based rate limit and forwards to master with `x-api-key`.
-3. Master validates payload and credentials against DynamoDB.
-4. Next route issues `ui_token` cookie (HTTP-only, 1 hour expiry).
-
-### Upload
-
-1. Browser uploads via `POST /api/upload` (multipart form-data).
-2. Next route verifies `ui_token`, extracts email, applies upload rate limit, forwards file to master.
-3. Master checks reachable workers (`GET /test`) and requires at least 2.
-4. Master splits file into chunks and writes each chunk to 2 workers (`POST /chunks`).
-5. Master writes `Chunks` rows and one `Files` row to DynamoDB.
-
-### Download
-
-1. Browser calls `GET /api/files/download` with file identifiers.
-2. Next route verifies cookie and forwards request to master.
-3. Master resolves file metadata and chunk map from DynamoDB.
-4. Master fetches each chunk from available replicas until one succeeds.
-5. Master concatenates chunks and streams attachment response.
-
-### Delete
-
-1. Browser calls `DELETE /api/files`.
-2. Next route verifies cookie and forwards email + file identifier.
-3. Master resolves file, requests workers to remove chunk directory (`DELETE /files/by-id`, best effort).
-4. Master removes rows from `Chunks` and `Files`.
-
-## 6. APIs
-
-### Master API (`master`)
-
-Base URL: `http://localhost:<MASTER_PORT>`
-
-### Auth
+Base: `http://localhost:5000` (or `PORT` override)
 
 - `POST /auth/signup`
-  - Body: `{ "username", "email", "password" }`
 - `POST /auth/login`
-  - Body: `{ "username" or "email", "password" }`
+- `POST /files/upload` (multipart `file`, plus `email`)
+- `GET /files/user-files?email=...`
+- `GET /files/chunk-info?email=...&storedFilename=...` (or `filename`)
+- `GET /files/download?email=...&storedFilename=...` (or `filename`)
+- `DELETE /files/delete` with JSON body `{ email, storedFilename? , filename? }`
 
-### Files
+All these routes currently apply both:
 
-- `POST /files/upload`
-  - Multipart: `file`
-  - Fields: `email`
-- `GET /files/user-files?email=<email>`
-- `GET /files/chunk-info?email=<email>&storedFilename=<name>` (or `filename`)
-- `GET /files/download?email=<email>&storedFilename=<name>` (or `filename`)
-- `DELETE /files/delete`
-  - Body: `{ "email", "storedFilename" }` (or `filename`)
+- API key middleware
+- express-rate-limit middleware (`60/min/IP`)
 
-All routed endpoints use:
+### Worker API
 
-- API key middleware (`x-api-key` header)
-- Express rate limiter (60 req/min per IP)
+Each worker exposes:
 
-### Worker API (`worker1`, `worker2`, `worker3`)
-
-Base URL: `http://localhost:<WORKER_PORT>`
-
-- `GET /test` health endpoint
+- `GET /test`
 - `POST /chunks`
-  - Body: `{ "email", "fileId", "chunkIndex", "chunkData" (base64) }`
-- `GET /chunks/:fileId/:chunkIndex?email=<email>`
+- `GET /chunks/:fileId/:chunkIndex?email=...`
 - `DELETE /files/by-id`
-  - Body: `{ "email", "fileId" }`
 
-### Next.js UI API (`user-interface/app/api`)
-
-Browser-facing endpoints:
+### Next.js Browser-Facing API
 
 - `POST /api/signup`
 - `POST /api/login`
@@ -210,76 +121,52 @@ Browser-facing endpoints:
 - `GET /api/files/chunk-info`
 - `GET /api/files/download`
 
-These routes:
+Protected routes verify the `ui_token` cookie and forward requests to master with `x-api-key`.
 
-- Verify `ui_token` for protected operations
-- Enforce additional in-memory route rate limits on auth/upload
-- Forward to master with `x-api-key`
+## Environment Variables
 
-## 7. Environment Variables
-
-Create `.env` files per service.
-
-### `master/.env`
+### 1) Master (`master/.env`)
 
 ```env
 PORT=5000
 API_KEY=replace_with_shared_secret
-JWT_SECRET=replace_with_jwt_secret
+JWT_SECRET=replace_with_master_secret
 
-# Optional worker URLs (defaults in code point to private LAN IPs)
 WORKER1_BASE_URL=http://localhost:5001
 WORKER2_BASE_URL=http://localhost:5002
 WORKER3_BASE_URL=http://localhost:5003
 ```
 
-### `user-interface/.env.local`
+### 2) UI (`user-interface/.env.local`)
 
 ```env
 MASTER_BASE_URL=http://localhost:5000
 API_KEY=replace_with_same_shared_secret
-JWT_SECRET=replace_with_same_jwt_secret
+JWT_SECRET=replace_with_ui_secret
 ```
 
-### `worker1/.env`
+### 3) Workers
 
-```env
-PORT=5001
-CHUNKS_DIR=./filechunks
-```
+Workers read `PORT` and `CHUNKS_DIR` from process environment, but worker code does not load `.env` files automatically. Set env vars in your shell or process manager when starting workers.
 
-### `worker2/.env`
+Examples used in this README:
 
-```env
-PORT=5002
-CHUNKS_DIR=./filechunks
-```
+- Worker1: `PORT=5001`, `CHUNKS_DIR=./filechunks`
+- Worker2: `PORT=5002`, `CHUNKS_DIR=./filechunks`
+- Worker3: `PORT=5003`, `CHUNKS_DIR=./filechunks`
 
-### `worker3/.env`
-
-```env
-PORT=5003
-CHUNKS_DIR=./filechunks
-```
-
-Important:
-
-- `API_KEY` in UI and master must match.
-- `JWT_SECRET` in UI and master should be the same so tokens are consistently verifiable.
-- Use distinct worker ports locally.
-
-## 8. Local Setup and Run Guide
+## Local Run Guide
 
 ### Prerequisites
 
 - Node.js 20+
 - npm 10+
-- AWS credentials and permissions for DynamoDB access
+- AWS credentials with DynamoDB read/write permissions
 - DynamoDB tables: `Users`, `Files`, `Chunks`
 
-### Install dependencies
+### Install Dependencies
 
-Run in each service folder:
+From repo root:
 
 ```bash
 cd master && npm install
@@ -289,85 +176,123 @@ cd ../worker3 && npm install
 cd ../user-interface && npm install
 ```
 
-### Start services (recommended order)
+### Start Services
 
-1. Start workers:
+Use 5 terminals.
 
-```bash
-cd worker1 && npm run dev
-cd worker2 && npm run dev
-cd worker3 && npm run dev
+### Terminal 1: worker1
+
+PowerShell:
+
+```powershell
+cd worker1
+$env:PORT="5001"
+$env:CHUNKS_DIR="./filechunks"
+npm run dev
 ```
 
-2. Start master:
+Bash:
 
 ```bash
-cd master && npm run dev
+cd worker1
+PORT=5001 CHUNKS_DIR=./filechunks npm run dev
 ```
 
-3. Start frontend:
+### Terminal 2: worker2
+
+PowerShell:
+
+```powershell
+cd worker2
+$env:PORT="5002"
+$env:CHUNKS_DIR="./filechunks"
+npm run dev
+```
+
+Bash:
 
 ```bash
-cd user-interface && npm run dev
+cd worker2
+PORT=5002 CHUNKS_DIR=./filechunks npm run dev
 ```
 
-Then open: `http://localhost:3000`
+### Terminal 3: worker3
 
-## 9. Operational Notes and Limitations
+PowerShell:
 
-### Good behaviors currently implemented
+```powershell
+cd worker3
+$env:PORT="5003"
+$env:CHUNKS_DIR="./filechunks"
+npm run dev
+```
 
-- Upload blocked when fewer than 2 workers are reachable.
-- Download falls back across chunk replicas.
-- Chunk metadata completeness and replication checks before download.
-- Best-effort worker cleanup on delete to avoid hard failures.
+Bash:
 
-### Current trade-offs / limitations
+```bash
+cd worker3
+PORT=5003 CHUNKS_DIR=./filechunks npm run dev
+```
 
-- In-memory rate limiting in Next routes (`lib/rateLimit.ts`) is per-process and resets on restart.
-- DynamoDB `Scan` is used for user/file lookups in some flows; this is simple but can be costly at scale.
-- Worker endpoints currently do not enforce API key or token checks.
-- Chunk uploads are performed sequentially per chunk/replica; throughput can be improved with controlled parallelism.
-- No background repair process to rebuild missing replicas when a worker comes back.
-- No automated tests are included yet.
+### Terminal 4: master
 
-## 10. Troubleshooting
+```bash
+cd master
+npm run dev
+```
 
-### `503 At least 2 workers must be reachable`
+### Terminal 5: UI
 
-- Ensure worker services are running.
-- Verify `WORKER*_BASE_URL` values in `master/.env`.
-- Check health endpoint manually: `GET <worker>/test`.
+```bash
+cd user-interface
+npm run dev
+```
 
-### Auth errors (`401 Invalid API key`)
+Open: `http://localhost:3000`
 
-- Confirm `API_KEY` matches between `master/.env` and `user-interface/.env.local`.
-- Ensure Next routes are actually sending `x-api-key` (implemented in API proxy routes).
+## Runtime Notes
 
-### JWT errors (`Invalid token` or unauthorized)
+- Upload fails with HTTP 503 if fewer than 2 workers are reachable.
+- Worker storage cleanup on delete is best-effort; metadata deletion still proceeds.
+- Dashboard currently shows errors with an overlay card.
+- Login/Signup pages currently show a generic "Server is sleeping" message on request errors.
 
-- Confirm `JWT_SECRET` is configured in both master and UI.
-- Delete browser cookies and log in again.
+## Known Limitations
 
-### Upload/download failures
+- Worker APIs are not authenticated.
+- Next.js rate limiter is in-memory and per-process (`user-interface/lib/rateLimit.ts`).
+- Master uses DynamoDB scans for some lookups (`Users` by username, `Files` by email/filename).
+- No resumable uploads or background replica-repair job.
+- No automated tests in repository.
+- Logout is currently client navigation only (no server endpoint clearing cookie).
+- DynamoDB region is hardcoded to `ap-south-1` in `master/connectDB/dynamodb.js`.
 
-- Verify DynamoDB table names and key schema match expectations.
-- Check master logs for chunk index failures.
-- Check worker file system permissions for `CHUNKS_DIR`.
+## Troubleshooting
 
-## 11. Future Improvements
+### `At least 2 workers must be reachable for upload.`
 
-- Add worker authentication (API key or mTLS).
-- Add replication repair and rebalancing jobs.
-- Add resumable uploads and parallel chunk transfer.
-- Replace scans with indexed query patterns.
-- Add integration tests for upload/download/delete and failure cases.
-- Add observability (structured logs, metrics, traces).
+- Confirm all 3 workers are running.
+- Confirm master env has correct `WORKER*_BASE_URL` values.
+- Check each worker health route: `GET http://localhost:5001/test` etc.
 
----
+### `Invalid API key.`
 
-If you want, I can also generate:
+- Ensure `API_KEY` matches between master and UI env.
 
-- Docker Compose for all 5 services
-- A script to bootstrap DynamoDB tables
-- API docs in OpenAPI format
+### `Unauthorized` or `Invalid token`
+
+- Ensure UI has `JWT_SECRET` configured.
+- Clear browser cookies and log in again.
+
+### Ports already in use
+
+- All workers default to port 5000 if `PORT` is not set.
+- Start workers with explicit `PORT=5001/5002/5003`.
+
+## Suggested Next Improvements
+
+- Add worker auth (API key or mTLS).
+- Add proper logout endpoint to clear `ui_token`.
+- Add DynamoDB GSIs and replace scans with query patterns where possible.
+- Add integration tests for upload/download/delete and worker-failure cases.
+- Add Docker Compose for one-command local startup.
