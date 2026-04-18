@@ -4,17 +4,20 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
 import toast from "react-hot-toast";
+import Loader from "@/components/Loader";
+import ErrorAlert from "@/components/ErrorAlert";
 
 export default function SignupPage() {
       const [username, setUsername] = useState("");
       const [email, setEmail] = useState("");
       const [password, setPassword] = useState("");
       const [isSubmitting, setIsSubmitting] = useState(false);
+      const [errorMessage, setErrorMessage] = useState<string | null>(null);
       const router = useRouter();
 
       const handleSignup = async () => {
             if (!username.trim() || !email.trim() || !password.trim()) {
-                  toast.error("Please enter all fields.");
+                  setErrorMessage("Please enter all fields.");
                   return;
             }
 
@@ -29,10 +32,7 @@ export default function SignupPage() {
                   toast.success(response.data.message || "Signup successful!");
                   router.push("/dashboard");
             } catch (error) {
-                  const errorMessage = axios.isAxiosError(error)
-                        ? error.response?.data?.message ?? "Signup failed."
-                        : "Unable to reach server.";
-                  toast.error(errorMessage);
+                  setErrorMessage("Server is sleeping");
             } finally {
                   setIsSubmitting(false);
             }
@@ -40,6 +40,8 @@ export default function SignupPage() {
 
       return (
             <div className="h-screen w-screen p-1">
+                  {isSubmitting && <Loader message="Signing up..." />}
+                  {errorMessage && <ErrorAlert message={errorMessage} onClose={() => setErrorMessage(null)} />}
                   <div className="w-full h-full rounded-sm border border-gray-400 flex flex-col px-4 py-2 items-center">
                         <div className="w-full">
                               <h1 className="text-7xl font-bold text-gray-700 tracking-tighter ">SignUp</h1>

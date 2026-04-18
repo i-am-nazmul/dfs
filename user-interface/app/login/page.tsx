@@ -4,16 +4,19 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
 import toast from "react-hot-toast";
+import Loader from "@/components/Loader";
+import ErrorAlert from "@/components/ErrorAlert";
 
 export default function LoginPage() {
       const router = useRouter();
       const [username, setUsername] = useState("");
       const [password, setPassword] = useState("");
       const [isSubmitting, setIsSubmitting] = useState(false);
+      const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
       const handleLogin = async () => {
             if (!username.trim() || !password.trim()) {
-                  toast.error("Please enter valid credentials.");
+                  setErrorMessage("Please enter valid credentials.");
                   return;
             }
 
@@ -27,10 +30,7 @@ export default function LoginPage() {
                   toast.success(response.data.message || "Login successful!");
                   router.push("/dashboard");
             } catch (error) {
-                  const errorMessage = axios.isAxiosError(error)
-                        ? error.response?.data?.message ?? "Login failed."
-                        : "Unable to reach server.";
-                  toast.error(errorMessage);
+                  setErrorMessage("Server is sleeping");
             } finally {
                   setIsSubmitting(false);
             }
@@ -38,6 +38,8 @@ export default function LoginPage() {
 
       return (
             <div className="h-screen w-screen p-1">
+                  {isSubmitting && <Loader message="Logging in..." />}
+                  {errorMessage && <ErrorAlert message={errorMessage} onClose={() => setErrorMessage(null)} />}
                   <div className="w-full h-full rounded-sm border border-gray-400 flex flex-col px-4 py-2 items-center">
                         <div className="w-full">
                               <h1 className="text-7xl font-bold text-gray-700 tracking-tighter">Login</h1>

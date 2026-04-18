@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, useRef, useEffect, useCallback } from "react";
 import toast from "react-hot-toast";
 import axios from "axios";
+import ErrorAlert from "@/components/ErrorAlert";
 
 interface File {
   fileId: string;
@@ -46,6 +47,7 @@ export default function DashboardPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileChunkDetails, setFileChunkDetails] = useState<FileChunkDetails | null>(null);
   const [isLoadingChunkInfo, setIsLoadingChunkInfo] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const loadFiles = useCallback(async () => {
     try {
@@ -68,7 +70,7 @@ export default function DashboardPage() {
 
   const handleLogout = () => {
     toast.success("Logged out successfully!");
-    router.push("/signup");
+    router.push("/login");
   };
 
   const handleFileSelect = () => {
@@ -96,10 +98,12 @@ export default function DashboardPage() {
       toast.success(response.data.message || "File uploaded successfully!", { id: toastId });
       await loadFiles();
     } catch (error) {
-      const errorMessage = axios.isAxiosError(error)
+      toast.dismiss(toastId);
+      setIsUploading(false);
+      const errorMsg = axios.isAxiosError(error)
         ? error.response?.data?.message ?? "File upload failed."
         : "Unable to reach server.";
-      toast.error(errorMessage, { id: toastId });
+      setErrorMessage(errorMsg);
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) {
@@ -120,10 +124,11 @@ export default function DashboardPage() {
       setFiles(response.data.files || []);
       toast.success(response.data.message || "File deleted successfully.", { id: toastId });
     } catch (error) {
-      const errorMessage = axios.isAxiosError(error)
+      toast.dismiss(toastId);
+      const errorMsg = axios.isAxiosError(error)
         ? error.response?.data?.message ?? "File deletion failed."
         : "Unable to reach server.";
-      toast.error(errorMessage, { id: toastId });
+      setErrorMessage(errorMsg);
     }
   };
 
@@ -143,10 +148,10 @@ export default function DashboardPage() {
 
       setFileChunkDetails(response.data);
     } catch (error) {
-      const errorMessage = axios.isAxiosError(error)
+      const errorMsg = axios.isAxiosError(error)
         ? error.response?.data?.message ?? "Failed to load chunk information."
         : "Unable to reach server.";
-      toast.error(errorMessage);
+      setErrorMessage(errorMsg);
     } finally {
       setIsLoadingChunkInfo(false);
     }
@@ -194,10 +199,11 @@ export default function DashboardPage() {
 
       toast.success(`Downloaded ${downloadName}`, { id: toastId });
     } catch (error) {
-      const errorMessage = axios.isAxiosError(error)
+      toast.dismiss(toastId);
+      const errorMsg = axios.isAxiosError(error)
         ? error.response?.data?.message ?? "File download failed."
         : "Unable to reach server.";
-      toast.error(errorMessage, { id: toastId });
+      setErrorMessage(errorMsg);
     }
   };
 
@@ -221,7 +227,8 @@ export default function DashboardPage() {
 
   return (
     <main className="min-h-screen w-screen bg-linear-to-br from-gray-50 to-gray-100">
-      <div className="fixed right-8 top-6 z-20">
+      {errorMessage && <ErrorAlert message={errorMessage} onClose={() => setErrorMessage(null)} />}
+      <div className="fixed right-8 top-8 z-40">
         <button
           onClick={handleLogout}
           className="cursor-pointer rounded-lg bg-red-600 px-6 py-2 text-lg font-semibold text-white transition-all duration-200 hover:bg-red-700 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
@@ -230,7 +237,7 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      <div className="min-h-screen px-8 py-8">
+      <div className="min-h-screen px-8 py-20">
         <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
           <div className="flex flex-col items-center justify-center">
             <h1 className="text-8xl font-bold font-sans text-gray-800">Distributed File System with Fault Tolerance</h1>
