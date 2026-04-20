@@ -132,9 +132,6 @@ PORT=5000
 API_KEY=replace_with_shared_secret
 JWT_SECRET=replace_with_master_secret
 
-WORKER1_BASE_URL=http://localhost:5001
-WORKER2_BASE_URL=http://localhost:5002
-WORKER3_BASE_URL=http://localhost:5003
 ```
 
 ### 2) UI (`user-interface/.env.local`)
@@ -151,9 +148,9 @@ Workers read `PORT` and `CHUNKS_DIR` from process environment, but worker code d
 
 Examples used in this README:
 
-- Worker1: `PORT=5001`, `CHUNKS_DIR=./filechunks`
-- Worker2: `PORT=5002`, `CHUNKS_DIR=./filechunks`
-- Worker3: `PORT=5003`, `CHUNKS_DIR=./filechunks`
+- Worker1: `PORT=5000`, `CHUNKS_DIR=./filechunks`
+- Worker2: `PORT=5000`, `CHUNKS_DIR=./filechunks`
+- Worker3: `PORT=5000`, `CHUNKS_DIR=./filechunks`
 
 ## Local Run Guide
 
@@ -186,16 +183,16 @@ PowerShell:
 
 ```powershell
 cd worker1
-$env:PORT="5001"
+$env:PORT="5000"
 $env:CHUNKS_DIR="./filechunks"
-npm run dev
+node index.js
 ```
 
 Bash:
 
 ```bash
 cd worker1
-PORT=5001 CHUNKS_DIR=./filechunks npm run dev
+PORT=5000 CHUNKS_DIR=./filechunks node index.js
 ```
 
 ### Terminal 2: worker2
@@ -204,16 +201,16 @@ PowerShell:
 
 ```powershell
 cd worker2
-$env:PORT="5002"
+$env:PORT="5000"
 $env:CHUNKS_DIR="./filechunks"
-npm run dev
+node index.js
 ```
 
 Bash:
 
 ```bash
 cd worker2
-PORT=5002 CHUNKS_DIR=./filechunks npm run dev
+PORT=5000 CHUNKS_DIR=./filechunks node index.js
 ```
 
 ### Terminal 3: worker3
@@ -222,23 +219,23 @@ PowerShell:
 
 ```powershell
 cd worker3
-$env:PORT="5003"
+$env:PORT="5000"
 $env:CHUNKS_DIR="./filechunks"
-npm run dev
+node index.js
 ```
 
 Bash:
 
 ```bash
 cd worker3
-PORT=5003 CHUNKS_DIR=./filechunks npm run dev
+PORT=5000 CHUNKS_DIR=./filechunks node index.js
 ```
 
 ### Terminal 4: master
 
 ```bash
 cd master
-npm run dev
+node index.js
 ```
 
 ### Terminal 5: UI
@@ -273,7 +270,7 @@ Open: `http://localhost:3000`
 
 - Confirm all 3 workers are running.
 - Confirm master env has correct `WORKER*_BASE_URL` values.
-- Check each worker health route: `GET http://localhost:5001/test` etc.
+- Check each worker health route: `GET http://localhost:5000/test` etc.
 
 ### `Invalid API key.`
 
@@ -287,7 +284,7 @@ Open: `http://localhost:3000`
 ### Ports already in use
 
 - All workers default to port 5000 if `PORT` is not set.
-- Start workers with explicit `PORT=5001/5002/5003`.
+
 
 ## Suggested Next Improvements
 

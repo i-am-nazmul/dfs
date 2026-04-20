@@ -39,14 +39,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ message: "Server configuration is incomplete." }, { status: 500 });
   }
 
-  const masterResponse = await fetch(`${masterBaseUrl}/auth/signup`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-    },
-    body: JSON.stringify({ username, email, password }),
-  });
+  let masterResponse: Response;
+  try {
+    masterResponse = await fetch(`${masterBaseUrl}/auth/signup`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+      },
+      body: JSON.stringify({ username, email, password }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    return NextResponse.json(
+      { message: "Master server is unreachable from deployment." },
+      { status: 503 }
+    );
+  }
 
   const responseData = (await masterResponse.json().catch(() => null)) as { message?: string } | null;
 

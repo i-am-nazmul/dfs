@@ -30,7 +30,10 @@ export default function LoginPage() {
                   toast.success(response.data.message || "Login successful!");
                   router.push("/dashboard");
             } catch (error) {
-                  setErrorMessage("Server is sleeping");
+                  const errorMessage = axios.isAxiosError(error)
+                        ? error.response?.data?.message ?? "Server is sleeping"
+                        : "Server is sleeping";
+                  setErrorMessage(errorMessage);
             } finally {
                   setIsSubmitting(false);
             }
